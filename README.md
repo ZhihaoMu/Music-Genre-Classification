@@ -79,7 +79,14 @@ The lower macro F1 here reflects the imbalance problem — genres like Easy List
 ---
 
 ## Repository Structure
-
+ 
+**GitHub** — [`ZhihaoMu/Music-Genre-Classification`](https://github.com/ZhihaoMu/Music-Genre-Classification)
+```
+├── fma-music-genre-classification.ipynb    # Training notebook (runs on Kaggle)
+└── README.md
+```
+ 
+**Hugging Face Spaces** — [`XiaoyuMa94/Music_Genre_Classification`](https://huggingface.co/spaces/XiaoyuMa94/Music_Genre_Classification/tree/main)
 ```
 ├── app.py                                  # Streamlit demo app
 ├── requirements.txt                        # Python dependencies
@@ -88,12 +95,9 @@ The lower macro F1 here reflects the imbalance problem — genres like Easy List
 ├── embeddings.npz                          # Precomputed track embeddings for similarity search
 ├── confusion_matrix.png                    # Validation confusion matrix
 ├── per_class_f1.csv                        # Per-genre F1 scores
-├── samples/                                # Sample audio clips (2 per genre)
-├── fma-music-genre-classification.ipynb    # Training notebook (runs on Kaggle)
-├── kaggle_cnn.py                           # Custom CNN training script
-└── README.md
+└── samples/                                # Sample audio clips (2 per genre)
 ```
-
+ 
 ---
 
 ## How to Run
