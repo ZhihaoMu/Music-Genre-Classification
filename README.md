@@ -37,17 +37,25 @@ Each 30-second `.mp3` clip is loaded using `librosa` and converted to a log-mel 
 ### Step 2 — Image Classification
 We treated each spectrogram as a 224×224 RGB image and trained two types of models:
 
-**Custom CNN (trained from scratch on FMA-Small):**
-- 4 conv blocks with BatchNorm and MaxPooling
-- Global Average Pooling + 2 fully connected layers
-- Test accuracy: ~47%, Macro F1: 0.44
-
-**ResNet34 fine-tuned via FastAI (trained on FMA-Medium):**
+**ConvNeXt-Tiny(pretrained) fine-tuned via FastAI (trained on FMA-Medium):**
 - Pretrained ImageNet weights, fine-tuned with `learn.fine_tune(8)`
 - Label smoothing (0.1) and macro-F1 metric to handle class imbalance
-- Validation accuracy: ~65%, Macro F1: ~0.40
+- Validation accuracy: ~62%, Macro F1: ~0.42
+The ConvNeXt-Tiny  model benefited from more data (25k vs 8k) but the class imbalance in FMA-Medium made it harder to get strong F1 scores across all genres.
 
-The ResNet model benefited from more data (25k vs 8k) but the class imbalance in FMA-Medium made it harder to get strong F1 scores across all genres.
+
+
+**Simple CNN (trained from scratch on FMA-Medium):**
+- 4 conv blocks with BatchNorm and MaxPooling
+- Global Average Pooling + 2 fully connected layers
+- Test accuracy: ~63%, Macro F1: 0.43
+
+
+**Logistic regression (mel statistics)**
+- Validation accuracy: ~56%, Macro F1: ~0.29
+
+
+
 
 ### Step 3 — Web App
 The final model is exported as a plain PyTorch checkpoint (`genre_model_plain.pt`) with no FastAI dependency at inference time, and served via a Streamlit app deployed on Hugging Face Spaces.
