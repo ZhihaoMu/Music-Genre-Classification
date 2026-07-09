@@ -1,6 +1,6 @@
 # Music Genre Classification from Mel-Spectrograms
 
-**Author:** Zhihao Mu · **Date:** July 2026 · **Dataset:** FMA (Free Music Archive)
+**Author:** Xiaoyu Ma, Zhihao Mu · **Date:** July 2026 · **Dataset:** FMA (Free Music Archive)
 
 ## Abstract
 
