@@ -52,38 +52,45 @@ The ResNet model benefited from more data (25k vs 8k) but the class imbalance in
 ### Step 3 — Web App
 The final model is exported as a plain PyTorch checkpoint (`genre_model_plain.pt`) with no FastAI dependency at inference time, and served via a Streamlit app deployed on Hugging Face Spaces.
 
+**Note:** the trained model (`genre_model_plain.pt`, ~110 MB) and data artifacts are not
+in this repo (GitHub's 100 MB limit). They are hosted on the Hugging Face Space, which
+serves as the model registry. To retrain from scratch, run the notebook on Kaggle with
+the "FMA - Free Music Archive - Small & Medium" dataset attached (T4 GPU, ~2 h total).
+
 ---
 
 ## Results
 
-### Custom CNN on FMA-Small (8 genres)
+Five models of increasing capability, all evaluated on the official FMA test split:
 
-| Genre | F1-Score |
-|---|---|
-| Hip-Hop | 0.75 |
-| Electronic | 0.63 |
-| International | 0.52 |
-| Instrumental | 0.41 |
-| Experimental | 0.38 |
-| Pop | 0.37 |
-| Rock | 0.35 |
-| Folk | 0.14 |
+| Model | Test accuracy | Test macro-F1 |
+|---|---|---|
+| Random guess | 0.066 | 0.048 |
+| Majority class (Rock) | 0.276 | 0.027 |
+| Logistic regression (mel statistics) | 0.564 | 0.293 |
+| SimpleCNN (from scratch) | 0.636 | 0.433 |
+| ConvNeXt-Tiny (pretrained) | 0.623 | 0.423 |
 
-Overall test accuracy: **47%** — not amazing but a reasonable baseline for a custom CNN trained from scratch on 6,400 samples.
-
-### ResNet34 on FMA-Medium (16 genres)
-Best validation accuracy: **65%**, Macro F1: **0.40**
-
-The lower macro F1 here reflects the imbalance problem — genres like Easy Listening (only 21 training clips) are very hard to learn.
+Key findings: performance tracks per-genre data availability almost monotonically;
+ImageNet pretraining buys convergence speed and stability more than raw accuracy on
+spectrograms; and naive inverse-frequency class weighting is catastrophic (9% accuracy)
+while square-root-capped weighting works. Full analysis in [REPORT.md](REPORT.md).
 
 ---
 
-## Repository Structure
  
-**GitHub** — [`ZhihaoMu/Music-Genre-Classification`](https://github.com/ZhihaoMu/Music-Genre-Classification)
+## Repository structure
+
 ```
-├── fma-music-genre-classification.ipynb    # Training notebook (runs on Kaggle)
-└── README.md
+├── README.md                      this file
+├── REPORT.md                      full project report
+├── notebook/
+│   └── fma-music-genre-classification.ipynb    training pipeline (Kaggle)
+├── app/
+│   ├── app.py                     Streamlit app (deployed on HF Spaces)
+│   ├── requirements.txt
+│   └── README.md                  deployment instructions
+└── .gitignore
 ```
  
 **Hugging Face Spaces** — [`XiaoyuMa94/Music_Genre_Classification`](https://huggingface.co/spaces/XiaoyuMa94/Music_Genre_Classification/tree/main)
@@ -111,12 +118,21 @@ The lower macro F1 here reflects the imbalance problem — genres like Easy List
 ### Demo App (Local)
 ```bash
 pip install -r requirements.txt
+# download genre_model_plain.pt from the HF Space into this folder
 streamlit run app.py
 ```
 Then open `http://localhost:8501` in your browser.
 
+
+
 ### Demo App (Online)
 Just visit: https://huggingface.co/spaces/XiaoyuMa94/Music_Genre_Classification
+
+## Tech stack & credits
+
+PyTorch · timm · fastai (training) · librosa · Streamlit · Hugging Face Spaces ·
+Kaggle (T4 GPU). Dataset: [FMA — Free Music Archive](https://github.com/mdeff/fma)
+(Defferrard et al., 2017), used under Creative Commons licensing.
 
 ---
 
