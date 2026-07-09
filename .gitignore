@@ -1,0 +1,22 @@
+# Large binaries — hosted on the Hugging Face Space instead (GitHub 100 MB limit)
+*.pt
+*.pkl
+*.npz
+*.pth
+samples/
+app_artifacts/
+app_artifacts.zip
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Notebook checkpoints
+.ipynb_checkpoints/

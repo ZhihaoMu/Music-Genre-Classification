@@ -1,0 +1,10 @@
+# Pure-PyTorch inference — no fastai needed, no version pinning needed.
+torch
+timm
+streamlit
+librosa
+soundfile
+av
+matplotlib
+pandas
+numpy
