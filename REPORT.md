@@ -138,13 +138,26 @@ are mid-song excerpts rather than intros.
 
 **Domain shift.** The model is trained on Creative-Commons indie music; commercially
 mastered tracks (e.g., from YouTube) are out-of-distribution, and their predictions skew
-toward Experimental — the model's de facto catch-all class. **Rare genres.** No training
+toward Experimental — the model's de facto catch-all class. 
+
+**Rare genres.** No training
 technique can learn Easy Listening from 13 examples; options are collecting data, merging
-related genres, or honestly reporting the failure (our choice). **Future work**, in order
+related genres, or honestly reporting the failure (our choice). 
+
+**Temporal resolution loss from resizing.** A 30-second clip produces a 128 × 1,292 spectrogram, but the network consumes a 224 × 224 image, so the time axis is squished by a factor of roughly 5.8 and each output column spans about 135 ms of audio. Percussive transients (on the order of 20 ms) are smeared into their neighbours, and the fine rhythmic detail — groove, swing, drum-attack sharpness — that distinguishes genres such as Jazz, Blues, and Hip-Hop is attenuated before the model ever sees it. Compounding this, the resize is a fixed squish rather than a fixed pixels-per-second rate, so clips shorter than 30 seconds are compressed less and an identical tempo maps to different pixel spacings across the dataset, leaving the model no consistent time scale to learn from. This likely pushes the network toward timbral rather than rhythmic evidence — consistent with the 56.4% accuracy already reached by logistic regression on purely time-averaged mel statistics, which discards rhythm entirely. Preserving the time axis (for example, a 224 × 448 input, or the windowed inference proposed below) is the natural remedy.
+
+
+
+**Future work**, in order
 of expected value: training on multiple 10-second windows per track with per-track
 probability voting (estimated +3–5% accuracy); audio-native pretrained backbones (AST,
 PANNs) that would test the ImageNet-transfer hypothesis directly; and probability
 calibration so the app's confidence numbers are trustworthy.
+
+
+
+
+
 
 ## 8. Conclusion
 
