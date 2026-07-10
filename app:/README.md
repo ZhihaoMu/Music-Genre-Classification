@@ -1,231 +1,248 @@
-# 🎵 Music Genre Classifier — Demo App
+# 🎵 Music Genre Classifier
 
-Streamlit app that classifies music clips into 16 FMA genres using a
-ConvNeXt-Tiny trained on mel-spectrograms. Three pages: **Classify**
-(with Grad-CAM "what the model heard" overlay), **Find similar**
-(embedding nearest-neighbors), and **How it works** (confusion matrix +
-F1).
+Upload a music clip, get a genre — plus a picture of *why*.
 
-The app is **pure PyTorch + timm — no fastai at inference** — so there
-is no pickle/version coupling between Kaggle and your laptop or the
-Hugging Face Space. Only `genre_model_plain.pt` is required; everything
-else degrades gracefully with an "add me" note.
+This app converts audio into a mel-spectrogram (an image of sound) and classifies it into
+**16 genres** with a ConvNeXt-Tiny network fine-tuned on the
+[Free Music Archive](https://github.com/mdeff/fma) dataset. It also shows you the
+spectrogram the model actually looked at, a Grad-CAM heatmap of the time–frequency regions
+that drove the decision, and the ten most acoustically similar tracks in the reference set.
+
+**[▶ Try the live demo](https://huggingface.co/spaces/<your-username>/<your-space>)** ·
+Runs on CPU. No GPU needed.
+
+<!-- Add a screenshot here: docs/screenshot-classify.png -->
 
 ---
 
-## Step 1a — Export the plain model (REQUIRED)
+## Contents
 
-Paste this cell at the end of your Kaggle notebook and run it while the
-trained `learn` is in memory. (Fresh session? First recover the learner:
-attach the saved notebook version's output and run
-`from fastai.vision.all import *; learn = load_learner(<path to the .pkl>)`
-— unpickling works fine *on Kaggle* because it's the same environment.)
+- [What it does](#what-it-does)
+- [Genres](#genres)
+- [How well does it work?](#how-well-does-it-work)
+- [Run it locally](#run-it-locally)
+- [Deploy your own copy](#deploy-your-own-copy)
+- [How it works](#how-it-works)
+- [Repository layout](#repository-layout)
+- [Known limitations](#known-limitations)
+- [Training and export](#training-and-export)
+- [Credits and license](#credits-and-license)
 
-The cell rebuilds the model in plain PyTorch, **numerically verifies**
-it gives identical outputs, and only then saves. If the assert fails,
-send the printed head layout to Claude.
+---
 
-```python
-# ============ PLAIN EXPORT — pure-torch model file ============
-ARCH = 'convnext_tiny.fb_in22k'      # the timm arch you trained
+## What it does
 
-import torch, torch.nn as nn, torch.nn.functional as F, timm
+The app has three pages.
 
-model = learn.model.eval().float().cpu()
-body_fastai, head_fastai = model[0], model[1]
-body_raw = getattr(body_fastai, 'model', body_fastai)   # unwrap TimmBody
+**🎵 Classify.** Upload an `mp3`, `wav`, `m4a`, `ogg`, or `flac` file — or click one of the
+bundled sample clips — and the app returns the predicted genre, a confidence score, and the
+full probability distribution over all 16 genres. Alongside the prediction you see:
 
-# --- describe the head as a plain spec ---
-spec = []
-for m in head_fastai.children():
-    n = type(m).__name__
-    if n == 'AdaptiveConcatPool2d':      spec.append(['concat_pool'])
-    elif n == 'Flatten':                 spec.append(['flatten'])
-    elif isinstance(m, nn.BatchNorm1d):  spec.append(['bn', m.num_features])
-    elif isinstance(m, nn.Dropout):      spec.append(['dropout', m.p])
-    elif isinstance(m, nn.Linear):       spec.append(['linear', m.in_features,
-                                                      m.out_features,
-                                                      m.bias is not None])
-    elif isinstance(m, nn.ReLU):         spec.append(['relu'])
-    else:
-        print(head_fastai); raise ValueError(f'unexpected head layer: {n}')
+- the **mel-spectrogram** the network received as input, and
+- a **Grad-CAM overlay** marking the regions of that spectrogram the network weighted most
+  heavily. Bright areas low on the frequency axis usually mean the model keyed on rhythm and
+  bass; bright areas up top usually mean it keyed on cymbals, vocals, or synth texture.
 
-# --- rebuild in plain torch and VERIFY ---
-class ConcatPool(nn.Module):
-    def forward(self, x):
-        return torch.cat([F.adaptive_max_pool2d(x, 1),
-                          F.adaptive_avg_pool2d(x, 1)], dim=1)
+**🔎 Find similar.** Embeds your clip using the network's pooled backbone features (a
+1,536-dimensional vector) and returns the nearest neighbours by cosine similarity from a
+reference set of 2,504 FMA validation tracks, listed with artist and title. This is genre
+classification's more interesting cousin: the model has learned an acoustic space, and you can
+browse it.
 
-def build_head(spec):
-    L = []
-    for s in spec:
-        k = s[0]
-        if k == 'concat_pool': L.append(ConcatPool())
-        elif k == 'flatten':   L.append(nn.Flatten(1))
-        elif k == 'bn':        L.append(nn.BatchNorm1d(s[1]))
-        elif k == 'dropout':   L.append(nn.Dropout(s[1]))
-        elif k == 'linear':    L.append(nn.Linear(s[1], s[2], bias=s[3]))
-        elif k == 'relu':      L.append(nn.ReLU(inplace=True))
-    return nn.Sequential(*L)
+**📊 How it works.** The pipeline description, the confusion matrix, and the per-genre
+precision/recall/F1 table — including the genres the model is bad at.
 
-class FeatureBody(nn.Module):
-    """fastai's TimmBody calls forward_features(), NOT the full forward()
-    — the full forward would also apply timm's own head norm/pool."""
-    def __init__(self, m):
-        super().__init__(); self.m = m
-    def forward(self, x):
-        return self.m.forward_features(x)
+Only the model file is required. Every other feature (samples, similarity search, confusion
+matrix, F1 table) degrades gracefully to an "add this file" note if its artifact is missing.
 
-body2 = timm.create_model(ARCH, pretrained=False, num_classes=0)
-body2.load_state_dict(body_raw.state_dict())
-head2 = build_head(spec); head2.load_state_dict(head_fastai.state_dict())
-plain = nn.Sequential(FeatureBody(body2), head2).eval()
+## Genres
 
-x = torch.randn(2, 3, 224, 224)
-with torch.no_grad():
-    diff = (plain(x) - model(x)).abs().max().item()
-print('max output diff:', diff)
-assert diff < 1e-4, 'rebuild mismatch — send Claude the printed head above'
+`Blues` · `Classical` · `Country` · `Easy Listening` · `Electronic` · `Experimental` ·
+`Folk` · `Hip-Hop` · `Instrumental` · `International` · `Jazz` · `Old-Time / Historic` ·
+`Pop` · `Rock` · `Soul-RnB` · `Spoken`
 
-torch.save({'arch': ARCH, 'vocab': list(learn.dls.vocab), 'head_spec': spec,
-            'body_sd': body2.state_dict(), 'head_sd': head2.state_dict()},
-           '/kaggle/working/genre_model_plain.pt')
-print('SAVED genre_model_plain.pt | genres:', list(learn.dls.vocab))
-# ===============================================================
-```
+These are FMA's top-level genre labels, assigned by the uploading artists.
 
-Download `genre_model_plain.pt` from the Output sidebar / Output tab.
+## How well does it work?
 
-## Step 1b — Export the presentation extras (optional)
+Scores on FMA-medium's **official, artist-disjoint test split** (2,572 clips the model never
+saw during training or checkpoint selection):
 
-Run after Step 1a (uses `plain`, `learn`, and `SPEC_DIR` from earlier
-cells). Produces the confusion matrix, per-genre F1, embeddings for
-"find similar", and sample clips, zipped as `app_artifacts.zip`.
+| Model | Accuracy | Macro-F1 |
+|---|---|---|
+| Random guess | 0.066 | 0.048 |
+| Always predict "Rock" | 0.276 | 0.027 |
+| Logistic regression on mel-band statistics | 0.564 | 0.293 |
+| SimpleCNN, trained from scratch (~1M params) | 0.636 | 0.433 |
+| **ConvNeXt-Tiny, pretrained (~28M params)** ← *shipped in this app* | **0.623** | **0.423** |
 
-```python
-# ============ ARTIFACTS EXPORT ============
-import os, glob, shutil, random, zipfile
-import numpy as np, pandas as pd, matplotlib.pyplot as plt
-from PIL import Image
-from sklearn.metrics import classification_report
-from fastai.vision.all import ClassificationInterpretation, get_image_files
+Accuracy is ~9× better than chance. Macro-F1 (the unweighted mean of per-genre F1) is the
+number to trust: the dataset is dominated by Rock and Electronic, so accuracy alone flatters
+any model that learns to guess those two.
 
-OUT = '/kaggle/working/app_artifacts'; os.makedirs(OUT, exist_ok=True)
+Per-genre performance varies enormously, and the app is upfront about it:
 
-# 1. Confusion matrix + per-class F1 (validation set)
-interp = ClassificationInterpretation.from_learner(learn)
-interp.plot_confusion_matrix(figsize=(10, 10))
-plt.savefig(f'{OUT}/confusion_matrix.png', bbox_inches='tight'); plt.close('all')
+| Strong | Weak |
+|---|---|
+| Rock (F1 0.83), Classical (0.82), Old-Time/Historic (0.80), Electronic (0.72), Hip-Hop (0.72) | Pop (0.11), Soul-RnB (0.07), Blues (0.00), Easy Listening (0.00) |
 
-preds, targs = learn.get_preds()
-vocab = list(learn.dls.vocab)
-rep = classification_report(targs.numpy(), preds.argmax(1).numpy(),
-                            target_names=vocab, output_dict=True)
-pd.DataFrame([{'genre': g, 'precision': rep[g]['precision'],
-               'recall': rep[g]['recall'], 'f1': rep[g]['f1-score'],
-               'support': int(rep[g]['support'])} for g in vocab]
-             ).round(3).to_csv(f'{OUT}/per_class_f1.csv', index=False)
+The weak genres fail for two different reasons. Blues (58 training clips) and Easy Listening
+(13) fail because there is nothing to learn from. Pop fails despite having 945 clips, because
+"Pop" is a fuzzy human category that overlaps Rock, Electronic, and Folk — its predictions
+scatter across those three.
 
-# 2. Embeddings with the PLAIN model (must match app.py's embed_clip)
-#    Names use artist/title from tracks.csv (`tracks` from the labels cell).
-import torch
-IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406])[:, None, None]
-IMAGENET_STD  = torch.tensor([0.229, 0.224, 0.225])[:, None, None]
+> **Note on the leaderboard.** The from-scratch CNN edged out the pretrained ConvNeXt in the
+> final run. Run-to-run variance is ±1–2 points, and an earlier ConvNeXt run scored 0.648 /
+> 0.445. The honest reading is that ImageNet features transfer only *weakly* to spectrograms,
+> which are not natural images; pretraining bought convergence speed and training stability
+> rather than a decisive accuracy win. We ship ConvNeXt because its training curve is stable
+> and reproducible, not because it is dramatically better.
 
-meta_a, meta_t = tracks[('artist', 'name')], tracks[('track', 'title')]
-def track_name(tid, genre):
-    a, t = meta_a.get(tid), meta_t.get(tid)
-    a = str(a) if pd.notna(a) else 'Unknown artist'
-    t = str(t) if pd.notna(t) else f'track {tid}'
-    return f'{a} — {t}  ({genre})'
-def prep(png):
-    img = Image.open(png).convert('RGB').resize((224, 224))
-    t = torch.from_numpy(np.array(img)).permute(2, 0, 1).float() / 255.
-    return (t - IMAGENET_MEAN) / IMAGENET_STD
-
-plain_gpu = plain.cuda().eval()
-val_pngs = get_image_files(SPEC_DIR/'validation')
-embs, names = [], []
-with torch.no_grad():
-    for i in range(0, len(val_pngs), 64):
-        batch = torch.stack([prep(p) for p in val_pngs[i:i+64]]).cuda()
-        f = plain_gpu[0](batch)
-        v = ConcatPool()(f).flatten(1).cpu().numpy()
-        embs.append(v)
-        names += [track_name(int(p.stem), p.parent.name)
-                  for p in val_pngs[i:i+64]]
-embs = np.concatenate(embs).astype(np.float32)
-np.savez_compressed(f'{OUT}/embeddings.npz', emb=embs,
-                    names=np.array(names, dtype=object))
-plain = plain.cpu()
-
-# 3. Sample clips: 2 mp3s per genre, named "Artist - Title.mp3"
-#    (uses df + id_to_path from cells 0/2)
-import re
-def safe(s, n=60):
-    return re.sub(r'[^\w\- .,()]', '', str(s))[:n].strip() or 'unknown'
-
-for g in df['genre'].unique():
-    ids = df[df['genre'] == g]['track_id'].sample(2, random_state=0)
-    d = f"{OUT}/samples/{str(g).replace('/', '-')}"; os.makedirs(d, exist_ok=True)
-    for tid in ids:
-        tid = int(tid)
-        dst = f"{d}/{safe(f'{meta_a.get(tid)} - {meta_t.get(tid)}')}.mp3"
-        if os.path.exists(dst):
-            dst = dst[:-4] + f' [{tid}].mp3'
-        shutil.copy(id_to_path[tid], dst)
-
-# 4. Zip
-with zipfile.ZipFile('/kaggle/working/app_artifacts.zip', 'w') as z:
-    for root, _, files in os.walk(OUT):
-        for f in files:
-            fp = os.path.join(root, f)
-            z.write(fp, os.path.relpath(fp, OUT))
-print('DONE -> download /kaggle/working/app_artifacts.zip')
-# ==========================================
-```
-
-## Step 2 — Test locally (recommended)
-
-Put `app.py`, `requirements.txt`, and `genre_model_plain.pt` in one
-folder, then:
+## Run it locally
 
 ```bash
+git clone https://github.com/<your-username>/<your-repo>.git
+cd <your-repo>
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-Any Python 3.10–3.12 environment works — no version matching needed.
+Then open <http://localhost:8501>.
 
-## Step 3 — Deploy to Hugging Face Spaces (free)
+**Requirements.** Python 3.10–3.12. Any recent PyTorch works — the model is stored as plain
+weights, not a pickled training object, so there is no version coupling to worry about.
+Inference on CPU takes about a second per clip.
 
-1. huggingface.co → **New Space** → SDK: **Streamlit** → hardware:
-   **CPU basic (free)**.
-2. **Files → Add file → Upload files**: `app.py`, `requirements.txt`,
-   `genre_model_plain.pt` (~110 MB — the web uploader handles Git LFS
-   automatically), plus the unzipped artifacts and `samples/` folder
-   when you have them.
-3. Wait for the build (~5–10 min; check the Logs tab on failure). Your
-   public URL: `https://huggingface.co/spaces/<you>/<space-name>`.
+**The model file.** `genre_model_plain.pt` (~110 MB) must sit next to `app.py`. If the repo
+uses Git LFS, `git lfs pull` will fetch it; otherwise download it from the
+[Releases](https://github.com/<your-username>/<your-repo>/releases) page. Without it, the app
+starts and tells you what's missing.
 
-## Sanity checks
+## Deploy your own copy
 
-- **Spectrogram settings** in `app.py` (`SR=22050, N_MELS=128,
-  N_FFT=2048, HOP=512`, per-clip min-max grayscale, flipud, Squish
-  resize to 224) match your notebook's `make_spectrogram` + DataBlock
-  exactly. If you ever change the notebook recipe, change `app.py`.
-- **Grad-CAM** auto-targets ConvNeXt (`stages[-1]`) or ResNet
-  (`layer4`); anything else just skips the overlay gracefully.
-- `embeddings.npz` must be generated by the Step 1b cell above (concat-
-  pooled backbone features) so the app's query embedding lives in the
-  same space.
+The app is built for [Hugging Face Spaces](https://huggingface.co/spaces) on the free CPU tier.
 
-## Presentation tips
+1. **New Space** → SDK: **Streamlit** → Hardware: **CPU basic (free)**.
+2. Upload `app.py`, `requirements.txt`, and `genre_model_plain.pt`. The web uploader handles
+   Git LFS for the model file automatically.
+3. Optionally upload `confusion_matrix.png`, `per_class_f1.csv`, `embeddings.npz`, and the
+   `samples/` folder to enable the methodology page, similarity search, and one-click demo
+   clips.
+4. Wait ~5–10 minutes for the build. Check the **Logs** tab if it fails.
 
-- Open on **Classify** with a bundled sample — one click, no file
-  hunting on stage.
-- Show the **Grad-CAM overlay** and explain one example ("the model
-  focused on the low-frequency rhythm here").
-- End on **How it works** — the confusion matrix and F1 table show
-  rigor, and being honest about which genres confuse the model always
-  lands well with reviewers.
+Your Space will be live at `https://huggingface.co/spaces/<you>/<space-name>`.
+
+## How it works
+
+```
+audio  →  mono @ 22,050 Hz  →  128-band log-mel spectrogram  →  224×224 grayscale image
+                                (n_fft 2048, hop 512)             (per-clip min–max norm)
+                                                                          │
+                                                    ConvNeXt-Tiny backbone (ImageNet-22k)
+                                                                          │
+                                              concat-pool → 1536-d ──┬──→ classifier head
+                                                                     │         │
+                                                                     │    16 genre probs
+                                                                     └──→ similarity search
+```
+
+Some deliberate choices worth knowing:
+
+- **Mel scale + log (dB) compression.** Mel bands space frequency the way human hearing does;
+  the log makes quiet spectral structure visible instead of letting a few loud partials
+  dominate.
+- **Per-clip normalization.** Every spectrogram is min–max scaled to 0–255 independently, so
+  the model learns spectral *patterns* rather than mastering loudness.
+- **Squish, not crop.** Images are resized anisotropically to 224×224 with no cropping. A
+  spectrogram's coordinates *mean* something — position encodes time and frequency — so the
+  training and inference transforms must be identical, and random crops would slice off real
+  information.
+- **Center-cropping at inference.** Uploads longer than 30 s are cropped to the middle 30 s.
+  FMA's training clips are mid-song excerpts, so classifying a song's intro would be a
+  train/serve mismatch.
+- **No fastai at inference.** The model was trained with fastai, but fastai's pickled export is
+  coupled to exact library versions and breaks outside its home environment. Instead, the
+  training notebook exports raw weights plus a declarative description of the classifier head,
+  rebuilds the network in plain PyTorch + timm, and *numerically verifies* — before saving —
+  that the rebuild produces bit-identical outputs. The app therefore depends only on `torch`
+  and `timm`.
+
+## Repository layout
+
+```
+app.py                    Streamlit application (all three pages)
+requirements.txt          Python dependencies
+genre_model_plain.pt      REQUIRED — weights + head spec + genre vocabulary
+confusion_matrix.png      optional — methodology page
+per_class_f1.csv          optional — methodology page
+embeddings.npz            optional — "Find similar" page (keys: 'emb', 'names')
+samples/<Genre>/*.mp3     optional — one-click demo clips
+```
+
+Anything marked optional can be absent; the app will say so and keep working.
+
+## Known limitations
+
+Read these before trusting a prediction.
+
+**Domain shift.** The model is trained on Creative-Commons indie music. Commercially mastered
+tracks — anything ripped from a streaming service or YouTube — are out of distribution, and
+their predictions tend to skew toward `Experimental`, which acts as the model's de facto
+catch-all class.
+
+**Rare genres are not learnable here.** `Easy Listening` has 13 training clips and `Blues` has
+58. Their F1 is effectively zero. No loss function fixes that; the app reports the failure
+rather than hiding it.
+
+**Fuzzy labels.** `Pop` is a marketing category, not an acoustic one. A 0.11 F1 on Pop is
+partly the model's fault and partly the label's.
+
+**Rhythm is compressed away by the resize.** A 30-second clip yields a 128 × 1,292
+spectrogram, but the network consumes 224 × 224 — the time axis is squished ~5.8×, so each
+pixel column spans roughly 135 ms. Percussive transients (~20 ms) are smeared into their
+neighbours, and fine rhythmic detail — groove, swing, drum-attack sharpness — is attenuated
+before the model ever sees it. Because the resize is a fixed squish rather than a fixed
+pixels-per-second rate, a clip shorter than 30 s is compressed less, so the same tempo maps to
+different pixel spacings and the model has no consistent time scale to learn from. This pushes
+the network toward timbral rather than rhythmic evidence, which is consistent with a logistic
+regression on purely time-averaged mel statistics already reaching 56.4% accuracy.
+
+**Confidence scores are uncalibrated.** The number the app prints next to the genre is a
+softmax output, not a probability you should bet on. Treat it ordinally.
+
+**Grad-CAM is a heuristic.** It tells you where gradient-weighted activations were large. It
+does not tell you what the model would have predicted had that region been different.
+
+## Training and export
+
+The full training pipeline — data loading, spectrogram rendering, the five-model comparison
+ladder, and the plain-PyTorch export cell that produces `genre_model_plain.pt` — lives in the
+Kaggle notebook:
+
+**[fma-music-genre-classification.ipynb](notebooks/fma-music-genre-classification.ipynb)**
+
+Headline training details: FMA-medium (25,000 clips, 19,909 / 2,504 / 2,572 official
+artist-disjoint split), class-weighted cross-entropy with square-root-dampened inverse-frequency
+weights capped at 3×, label smoothing 0.1, MixUp, mixed precision, 2 frozen + 24 unfrozen
+epochs on one T4, checkpointed on validation macro-F1. About 50 minutes of GPU time.
+
+If you retrain with different spectrogram settings, you **must** update the constants at the
+top of `app.py` (`SR`, `N_MELS`, `N_FFT`, `HOP`, `IMG_SIZE`) to match. A model only understands
+inputs prepared exactly the way its training data was.
+
+## Credits and license
+
+- **Dataset:** [FMA: A Dataset For Music Analysis](https://github.com/mdeff/fma) — Defferrard,
+  Benzi, Vandergheynst, and Bresson, ISMIR 2017. All audio is Creative Commons licensed; see
+  the FMA repository for per-track terms.
+- **Backbone:** `convnext_tiny.fb_in22k` via [timm](https://github.com/huggingface/pytorch-image-models).
+  ConvNeXt: *A ConvNet for the 2020s*, Liu et al., CVPR 2022.
+- **Built with:** PyTorch, timm, librosa, Streamlit.
+
+Code in this repository is released under the MIT License. The bundled sample clips retain
+their original Creative Commons licenses from FMA.
+
+---
+
+<sub>Built by Xiaoyu Ma and Zhihao Mu with the assistant of Claude Code. Questions, bug reports, and genre disagreements welcome in the
+[issues](https://github.com/<your-username>/<your-repo>/issues).</sub>
